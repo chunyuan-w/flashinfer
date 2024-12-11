@@ -31,7 +31,7 @@ this_dir = pathlib.Path(__file__).parent
 def get_version():
     version = os.getenv("FLASHINFER_BUILD_VERSION")
     if version is None:
-        with open(this_dir / "flashinfer" / "data" / "version.txt") as f:
+        with open(this_dir / ".." / "version.txt") as f:
             version = f.read().strip()
     return version
 

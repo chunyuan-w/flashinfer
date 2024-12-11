@@ -251,4 +251,6 @@ else:
 
 
 def get_cuda_stream(device: torch.device) -> int:
+    if device == torch.device('cpu'):
+        return -1
     return torch.cuda.current_stream(device).cuda_stream

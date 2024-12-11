@@ -45,8 +45,17 @@ from _aot_build_utils import (
     generate_single_prefill_inst,
 )
 
+force_cuda = os.environ.get("FLASHINFER_FORCE_CUDA", "0") == "1"
 enable_bf16 = os.environ.get("FLASHINFER_ENABLE_BF16", "1") == "1"
 enable_fp8 = os.environ.get("FLASHINFER_ENABLE_FP8", "1") == "1"
+
+build_cuda_sources = (torch.cuda.is_available() and (torch_cpp_ext.CUDA_HOME is not None)) or force_cuda
+
+print("Flashinfer build configuration:")
+print("FLASHINFER_FORCE_CUDA = ", force_cuda)
+print("FLASHINFER_ENABLE_BF16 = ", enable_bf16)
+print("FLASHINFER_ENABLE_FP8 = ", enable_fp8)
+print("BUILD_CUDA_SOURCES = ", build_cuda_sources)
 
 if enable_bf16:
     torch_cpp_ext.COMMON_NVCC_FLAGS.append("-DFLASHINFER_ENABLE_BF16")
@@ -303,6 +312,9 @@ def get_version():
 
 
 def get_cuda_version() -> Tuple[int, int]:
+    if not build_cuda_sources:
+        return 0, 0
+
     if torch_cpp_ext.CUDA_HOME is None:
         nvcc = "nvcc"
     else:
@@ -379,79 +391,117 @@ def link_data_files() -> Iterator[None]:
         (this_dir / "MANIFEST.in").unlink(True)
 
 
-if __name__ == "__main__":
+def check_cuda_arch():
     # cuda arch check for fp8 at the moment.
     for cuda_arch_flags in torch_cpp_ext._get_cuda_arch_flags():
         arch = int(re.search(r"compute_(\d+)", cuda_arch_flags).group(1))
         if arch < 75:
             raise RuntimeError("FlashInfer requires sm75+")
 
-    remove_unwanted_pytorch_nvcc_flags()
-    generate_build_meta()
-    files_prefill, files_decode, aot_kernel_uris = get_instantiation_cu()
-    generate_aot_config(aot_kernel_uris)
 
-    include_dirs = [
-        str(root.resolve() / "include"),
-        str(root.resolve() / "3rdparty" / "cutlass" / "include"),  # for group gemm
-        str(root.resolve() / "3rdparty" / "cutlass" / "tools" / "util" / "include"),
-    ]
-    extra_compile_args = {
-        "cxx": [
-            "-O3",
-            "-Wno-switch-bool",
-        ],
-        "nvcc": [
+def get_macros_and_flags():
+    define_macros = []
+    define_macros += [("CPU_CAPABILITY_AVX512", None)]
+    extra_compile_args = {"cxx": [
+        "-O3",
+        "-Wno-switch-bool",
+        "-Wno-unknown-pragmas",
+        "-march=native",
+        "-fopenmp",
+        ]
+    }
+    extra_compile_args_sm90 = {}
+
+    if build_cuda_sources:
+        extra_compile_args["nvcc"] = [
             "-O3",
             "-std=c++17",
             "--threads=1",
             "-Xfatbin",
             "-compress-all",
             "-use_fast_math",
-        ],
-    }
-    extra_compile_args_sm90 = copy.deepcopy(extra_compile_args)
-    extra_compile_args_sm90["nvcc"].extend(
-        "-gencode arch=compute_90a,code=sm_90a".split()
-    )
+        ]
+
+        extra_compile_args_sm90 = copy.deepcopy(extra_compile_args)
+        extra_compile_args_sm90["nvcc"].extend(
+            "-gencode arch=compute_90a,code=sm_90a".split()
+        )
+
+    return define_macros, extra_compile_args, extra_compile_args_sm90
+
+
+if __name__ == "__main__":
+    if build_cuda_sources:
+        check_cuda_arch()
+
+    remove_unwanted_pytorch_nvcc_flags()
+    generate_build_meta()
+    files_prefill, files_decode, aot_kernel_uris = get_instantiation_cu()
+    generate_aot_config(aot_kernel_uris)
+
+    include_dirs = []
+    cuda_include_dirs = [
+        str(root.resolve() / "include"),
+        str(root.resolve() / "3rdparty" / "cutlass" / "include"),  # for group gemm
+        str(root.resolve() / "3rdparty" / "cutlass" / "tools" / "util" / "include"),
+    ]
+
+    sources = [
+        "csrc/cpu/norm.cpp",
+        "csrc/cpu/flashinfer_ops.cpp",
+    ]
+    cuda_sources = [
+        "csrc/bmm_fp8.cu",
+        "csrc/cascade.cu",
+        "csrc/group_gemm.cu",
+        "csrc/norm.cu",
+        "csrc/page.cu",
+        "csrc/quantization.cu",
+        "csrc/rope.cu",
+        "csrc/sampling.cu",
+        "csrc/renorm.cu",
+        "csrc/activation.cu",
+        "csrc/batch_decode.cu",
+        "csrc/batch_prefill.cu",
+        "csrc/single_decode.cu",
+        "csrc/single_prefill.cu",
+        "csrc/flashinfer_ops.cu",
+    ]
+    cuda_sources += files_decode
+    cuda_sources += files_prefill
+
+    define_macros, extra_compile_args, extra_compile_args_sm90 = get_macros_and_flags()
+    # debug print
+    print(define_macros, extra_compile_args, extra_compile_args_sm90)
+
+    if build_cuda_sources:
+        Extension = torch_cpp_ext.CUDAExtension
+        sources += cuda_sources
+        include_dirs += cuda_include_dirs
+    else:
+        Extension = torch_cpp_ext.CppExtension
+
     ext_modules = []
     ext_modules.append(
-        torch_cpp_ext.CUDAExtension(
+        Extension(
             name="flashinfer._kernels",
-            sources=[
-                "csrc/bmm_fp8.cu",
-                "csrc/cascade.cu",
-                "csrc/group_gemm.cu",
-                "csrc/norm.cu",
-                "csrc/page.cu",
-                "csrc/quantization.cu",
-                "csrc/rope.cu",
-                "csrc/sampling.cu",
-                "csrc/renorm.cu",
-                "csrc/activation.cu",
-                "csrc/batch_decode.cu",
-                "csrc/batch_prefill.cu",
-                "csrc/single_decode.cu",
-                "csrc/single_prefill.cu",
-                "csrc/flashinfer_ops.cu",
-            ]
-            + files_decode
-            + files_prefill,
+            sources=sources,
             include_dirs=include_dirs,
+            define_macros=define_macros,
             extra_compile_args=extra_compile_args,
         )
     )
-    ext_modules.append(
-        torch_cpp_ext.CUDAExtension(
-            name="flashinfer._kernels_sm90",
-            sources=[
-                "csrc/group_gemm_sm90.cu",
-                "csrc/flashinfer_gemm_sm90_ops.cu",
-            ],
-            include_dirs=include_dirs,
-            extra_compile_args=extra_compile_args_sm90,
-        )
-    )
+    #ext_modules.append(
+    #    torch_cpp_ext.CUDAExtension(
+    #        name="flashinfer._kernels_sm90",
+    #        sources=[
+    #            "csrc/group_gemm_sm90.cu",
+    #            "csrc/flashinfer_gemm_sm90_ops.cu",
+    #        ],
+    #        include_dirs=include_dirs,
+    #        extra_compile_args=extra_compile_args_sm90,
+    #    )
+    #)
 
     # Suppress warnings complaining that:
     # Package 'flashinfer.data*' is absent from the `packages` configuration.
