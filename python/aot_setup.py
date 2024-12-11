@@ -447,6 +447,7 @@ if __name__ == "__main__":
     ]
 
     sources = [
+        "csrc/cpu/activation.cpp",
         "csrc/cpu/norm.cpp",
         "csrc/cpu/flashinfer_ops.cpp",
     ]
