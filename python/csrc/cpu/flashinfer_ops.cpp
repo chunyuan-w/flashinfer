@@ -203,7 +203,7 @@
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // activation
   m.def("silu_and_mul", &silu_and_mul, "Fused SiLU and Mul");
-  //m.def("gelu_tanh_and_mul", &gelu_tanh_and_mul, "Fused GeLU Tanh and Mul");
+  m.def("gelu_tanh_and_mul", &gelu_tanh_and_mul, "Fused GeLU Tanh and Mul");
   m.def("gelu_and_mul", &gelu_and_mul, "Fused GeLU and Mul");
 
   // cascade

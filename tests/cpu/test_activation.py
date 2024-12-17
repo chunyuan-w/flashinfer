@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from utils import compare
 
-from flashinfer.activation import silu_and_mul, gelu_and_mul
+from flashinfer.activation import silu_and_mul, gelu_and_mul, gelu_tanh_and_mul
 
 torch.manual_seed(1111)
 
@@ -15,7 +15,7 @@ torch.manual_seed(1111)
 #     d = x.shape[-1] // 2
 #     return F.silu(x[..., :d]) * x[..., d:]
 
-def forward_native(x: torch.Tensor, approximate="none") -> torch.Tensor:
+def forward_native(x: torch.Tensor, approximate="tanh") -> torch.Tensor:
     d = x.shape[-1] // 2
     return F.gelu(x[..., :d], approximate=approximate) * x[..., d:]
 
@@ -34,7 +34,8 @@ def run_single_test(shape, dtype, device="cuda"):
     out = torch.empty(output_shape, dtype=x.dtype, device=x.device)
 
     # silu_and_mul(x, out)
-    gelu_and_mul(x, out)
+    # gelu_and_mul(x, out)
+    gelu_tanh_and_mul(x, out)
 
     ref_out = forward_native(x)
 

@@ -93,3 +93,25 @@ void gelu_and_mul(at::Tensor& out, at::Tensor& input, int64_t cuda_stream) {
 
   TORCH_UNUSED(cuda_stream);
 }
+
+// input   : {num_tokens, 2 * d}
+// output  : {num_tokens, d}
+void gelu_tanh_and_mul(at::Tensor& out, at::Tensor& input, int64_t cuda_stream) {
+  int d = input.size(-1) / 2;
+  int num_tokens = input.numel() / input.size(-1);
+
+  AT_DISPATCH_REDUCED_FLOATING_TYPES(input.scalar_type(), "gelu_tanh_and_mul", [&] {
+    using Vec = at::vec::Vectorized<float>;
+    act_and_mul_kernel_impl(
+        out.data_ptr<scalar_t>(),
+        input.data_ptr<scalar_t>(),
+        num_tokens,
+        d,
+        [](float x) { return 0.5 * x * (1 + std::tanh((M_SQRT2 * M_2_SQRTPI * 0.5 * (x + 0.044715 * x * x * x)))); },
+        [](Vec x) { 
+            return Vec(0.5) * x * (Vec(1) + (Vec(M_SQRT2 * M_2_SQRTPI * 0.5) * (x + Vec(0.044715) * x * x * x)).tanh());
+        });
+  });
+
+  TORCH_UNUSED(cuda_stream);
+}
