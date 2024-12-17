@@ -9,3 +9,5 @@ void fused_add_rmsnorm(at::Tensor& input, at::Tensor& residual, at::Tensor& weig
     int64_t cuda_stream);
 
 void silu_and_mul(at::Tensor& out, at::Tensor& input, int64_t cuda_stream);
+
+void gelu_and_mul(at::Tensor& out, at::Tensor& input, int64_t cuda_stream);
