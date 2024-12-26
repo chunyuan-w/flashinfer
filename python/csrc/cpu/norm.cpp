@@ -42,7 +42,8 @@ void fused_add_rmsnorm_kernel_impl(
     float* __restrict__ buffer,
     int batch_size,
     int hidden_size,
-    float eps = 1e-5) {
+    float eps = 1e-5,
+    bool gemma=false) {
 
   using bVec = at::vec::Vectorized<scalar_t>;
   using fVec = at::vec::Vectorized<float>;
@@ -108,14 +109,14 @@ void fused_add_rmsnorm_kernel_impl(
         fVec w_fvec0, w_fvec1;
         std::tie(w_fvec0, w_fvec1) = at::vec::convert_to_float(w_bvec);
 
-        x_fvec0 = x_fvec0 * scale_fvec * w_fvec0;
-        x_fvec1 = x_fvec1 * scale_fvec * w_fvec1;
+        x_fvec0 = x_fvec0 * scale_fvec * (gemma ? (w_fvec0 + fVec(1)) : w_fvec0);
+        x_fvec1 = x_fvec1 * scale_fvec * (gemma ? (w_fvec1 + fVec(1)) : w_fvec1);
         bVec x_bvec = at::vec::convert_from_float<scalar_t>(x_fvec0, x_fvec1);
         x_bvec.store(input_ptr + d);
       }
 #pragma GCC unroll 4
       for (; d < hidden_size; ++d) {
-        float x_val = buffer_ptr[d] * rsqrt_var * static_cast<float>(weight[d]);
+        float x_val = buffer_ptr[d] * rsqrt_var * (gemma ? (static_cast<float>(weight[d]) + float(1)) : static_cast<float>(weight[d]));
         input_ptr[d] = x_val;
       }
     }   
@@ -212,6 +213,41 @@ void fused_add_rmsnorm(at::Tensor& input, at::Tensor& residual, at::Tensor& weig
         batch_size,
         hidden_size,
         eps);
+  });
+
+  TORCH_UNUSED(cuda_stream);
+}
+
+void gemma_fused_add_rmsnorm(at::Tensor& input, at::Tensor& residual, at::Tensor& weight, double eps,
+    int64_t cuda_stream) {
+
+  CHECK_INPUT(input);
+  CHECK_INPUT(residual);
+  CHECK_INPUT(weight);
+  CHECK_DIM(2, input);
+  CHECK_DIM(2, residual);
+  CHECK_DIM(1, weight);
+  CHECK_EQ(input.size(0), residual.size(0));
+  CHECK_EQ(input.size(1), residual.size(1));
+  CHECK_EQ(input.size(1), weight.size(0));
+  int batch_size = input.size(0);
+  int hidden_size = input.size(1);
+
+  // allocate temp buffer to store x in float32 per thread
+  // TODO: implement a singleton for context
+  int num_threads = at::get_num_threads();
+  at::Tensor buffer = at::zeros({num_threads, hidden_size}, input.options().dtype(at::kFloat));
+
+  AT_DISPATCH_REDUCED_FLOATING_TYPES(input.scalar_type(), "fused_add_rmsnorm_kernel", [&] {
+    fused_add_rmsnorm_kernel_impl<scalar_t>(
+        input.data_ptr<scalar_t>(),
+        residual.data_ptr<scalar_t>(),
+        weight.data_ptr<scalar_t>(),
+        buffer.data_ptr<float>(),
+        batch_size,
+        hidden_size,
+        eps,
+        true);
   });
 
   TORCH_UNUSED(cuda_stream);

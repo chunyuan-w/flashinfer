@@ -226,8 +226,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("rmsnorm", &rmsnorm, "Root mean square normalization");
   m.def("fused_add_rmsnorm", &fused_add_rmsnorm, "Fused add root mean square normalization");
   m.def("gemma_rmsnorm", &gemma_rmsnorm, "Gemma Root mean square normalization");
-  //m.def("gemma_fused_add_rmsnorm", &gemma_fused_add_rmsnorm,
-  //      "Gemma Fused add root mean square normalization");
+  m.def("gemma_fused_add_rmsnorm", &gemma_fused_add_rmsnorm,
+       "Gemma Fused add root mean square normalization");
 
   // page
   //m.def("append_paged_kv_cache", &append_paged_kv_cache, "Append paged KV-Cache operator");

@@ -16,7 +16,7 @@ from utils import compare
 #        rmsnorm,
 #    )
 
-from flashinfer.norm import rmsnorm, fused_add_rmsnorm, gemma_rmsnorm
+from flashinfer.norm import rmsnorm, fused_add_rmsnorm, gemma_rmsnorm, gemma_fused_add_rmsnorm
 
 torch.manual_seed(1111)
 
@@ -68,11 +68,12 @@ def run_single_test(shape, dtype, device="cuda"):
     ref_residual = residual.clone()
 
     # fused_add_rmsnorm(x, residual, weight, variance_epsilon)
+    gemma_fused_add_rmsnorm(x, residual, weight, variance_epsilon)
 
-    # ref_x, ref_residual = forward_native(ref_x, weight, variance_epsilon, ref_residual)
+    ref_x, ref_residual = forward_native(ref_x, weight, variance_epsilon, ref_residual)
 
-    # compare(x, ref_x, True)
-    # compare(residual, ref_residual, True)
+    compare(x, ref_x, True)
+    compare(residual, ref_residual, True)
 
 
 #run_single_test([4096, 4096], torch.bfloat16, "cuda")
