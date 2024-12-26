@@ -10,7 +10,8 @@ void rmsnorm_kernel_impl(
     const scalar_t* __restrict__ weight,
     int batch_size,
     int hidden_size,
-    float eps = 1e-5) {
+    float eps = 1e-5,
+    bool gemma=false) {
 
   using Vec = at::vec::Vectorized<float>;
   at::parallel_for(0, batch_size, 0, [&](int begin, int end) {
@@ -24,7 +25,7 @@ void rmsnorm_kernel_impl(
 
       const Vec scale_vec = Vec(rsqrt_var);
       at::vec::map2<scalar_t>(
-          [scale_vec](Vec x, Vec w) { return x * scale_vec * w; },
+          [scale_vec, gemma](Vec x, Vec w) { return x * scale_vec * (gemma ? w + Vec(1) : w); },
           output + i * hidden_size,
           input + i * hidden_size,
           weight,
@@ -147,6 +148,33 @@ void rmsnorm(at::Tensor& output, at::Tensor& input, at::Tensor& weight, double e
         batch_size,
         hidden_size,
         eps);
+  });
+
+  TORCH_UNUSED(cuda_stream);
+}
+
+void gemma_rmsnorm(at::Tensor& output, at::Tensor& input, at::Tensor& weight, double eps,
+    int64_t cuda_stream) {
+
+  CHECK_INPUT(input);
+  CHECK_INPUT(weight);
+  CHECK_DIM(2, input);
+  CHECK_DIM(1, weight);
+  CHECK_EQ(input.size(1), weight.size(0));
+  int batch_size = input.size(0);
+  int hidden_size = input.size(1);
+  CHECK_EQ(output.size(0), batch_size);
+  CHECK_EQ(output.size(1), hidden_size);
+
+  AT_DISPATCH_REDUCED_FLOATING_TYPES(input.scalar_type(), "rmsnorm_kernel", [&] {
+    rmsnorm_kernel_impl<scalar_t>(
+        output.data_ptr<scalar_t>(),
+        input.data_ptr<scalar_t>(),
+        weight.data_ptr<scalar_t>(),
+        batch_size,
+        hidden_size,
+        eps,
+        true);
   });
 
   TORCH_UNUSED(cuda_stream);
