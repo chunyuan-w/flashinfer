@@ -401,7 +401,6 @@ def check_cuda_arch():
 
 def get_macros_and_flags():
     define_macros = []
-    define_macros += [("CPU_CAPABILITY_AVX512", None)]
     extra_compile_args = {"cxx": [
         "-O3",
         "-Wno-switch-bool",
@@ -449,6 +448,7 @@ if __name__ == "__main__":
     sources = [
         "csrc/cpu/activation.cpp",
         "csrc/cpu/norm.cpp",
+        "csrc/cpu/decode.cpp",
         "csrc/cpu/flashinfer_ops.cpp",
     ]
     cuda_sources = [

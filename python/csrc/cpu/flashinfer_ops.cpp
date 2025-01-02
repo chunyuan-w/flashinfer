@@ -218,6 +218,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   //m.def("batch_decode_with_paged_kv_cache_plan", &BatchDecodeWithPagedKVCachePlan);
   //m.def("batch_decode_with_paged_kv_cache_run", &BatchDecodeWithPagedKVCacheRun);
 
+  m.def("decode_attention", &decode_attention, "CPU only attention decoding");
+
   // gemm
   //m.def("bmm_fp8", &bmm_fp8, "BMM FP8");
   //m.def("cutlass_segment_gemm", &CutlassSegmentGEMM, "Cutlass Segment GEMM operator");
