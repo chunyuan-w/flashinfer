@@ -175,7 +175,7 @@ void gemma_rmsnorm(at::Tensor& output, at::Tensor& input, at::Tensor& weight, do
         batch_size,
         hidden_size,
         eps,
-        true);
+        /*gemma*/true);
   });
 
   TORCH_UNUSED(cuda_stream);
@@ -247,7 +247,7 @@ void gemma_fused_add_rmsnorm(at::Tensor& input, at::Tensor& residual, at::Tensor
         batch_size,
         hidden_size,
         eps,
-        true);
+        /*gemma*/true);
   });
 
   TORCH_UNUSED(cuda_stream);
