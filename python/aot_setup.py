@@ -449,6 +449,7 @@ if __name__ == "__main__":
         "csrc/cpu/activation.cpp",
         "csrc/cpu/norm.cpp",
         "csrc/cpu/decode.cpp",
+        "csrc/cpu/topk.cpp",
         "csrc/cpu/flashinfer_ops.cpp",
     ]
     cuda_sources = [

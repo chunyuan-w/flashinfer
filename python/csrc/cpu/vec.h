@@ -34,6 +34,25 @@ inline Vectorized<at::BFloat16> convert_from_float_ext<at::BFloat16>(const Vecto
 
 #endif
 
+// vector to scalar reduction
+#if defined(CPU_CAPABILITY_AVX512) && 0
+inline float vec_reduce_sum(const Vectorized<float>& a) {
+  return _mm512_reduce_add_ps(__m512(a));
+}
+
+inline float vec_reduce_max(const Vectorized<float>& a) {
+  return _mm512_reduce_max_ps(__m512(a));
+}
+#else
+inline float vec_reduce_sum(const Vectorized<float>& a) {
+  return vec_reduce_all([](Vectorized<float>& x, Vectorized<float>& y) { return x + y; }, a);
+}
+
+inline float vec_reduce_max(const Vectorized<float>& a) {
+  return vec_reduce_all([](Vectorized<float>& x, Vectorized<float>& y) { return maximum(x, y); }, a);
+}
+#endif
+
 // debug
 template<typename scalar_t>
 void print_array(scalar_t* ptr, int size) {

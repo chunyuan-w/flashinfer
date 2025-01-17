@@ -253,6 +253,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   //      "Apply Llama 3.1 style RoPE with positional ids");
 
   // sampling
+  m.def("grouped_topk", &grouped_topk, "grouped topk sampling");
   //m.def("sampling_from_probs", &sampling_from_probs, "Sample from probabilities");
   //m.def("top_k_sampling_from_probs", &top_k_sampling_from_probs,
   //      "Top-k sampling from probabilities");

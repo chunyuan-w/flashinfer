@@ -17,3 +17,8 @@ void decode_attention(at::Tensor& query, at::Tensor& output,
     at::Tensor& k_cache, at::Tensor& v_cahce, at::Tensor& attn_logits,
     at::Tensor& req_to_token, at::Tensor& req_pool_indices,
     at::Tensor& seq_lens, double scaling, double logit_cap);
+
+// topk
+void grouped_topk(
+    at::Tensor& topk_weights, at::Tensor& topk_ids, at::Tensor& hidden_states, at::Tensor& gating_output,
+    int64_t topk, bool renormalize, int64_t num_expert_group, int64_t topk_group);
