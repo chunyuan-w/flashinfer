@@ -1,7 +1,6 @@
 #pragma once
 
 #include <ATen/ATen.h>
-#include <ATen/OpMathType.h>
 #include <ATen/Parallel.h>
 
 #if defined(_OPENMP)
@@ -51,6 +50,8 @@ inline constexpr uint32_t pack_u16(uint16_t a, uint16_t b) {
 #define CHECK_GE(a, b) TORCH_CHECK((a) >= (b), "CHECK_GE(" #a ", " #b ") failed. ", a, " vs ", b)
 
 // parallel routines
+constexpr int GRAIN_SIZE = 1024;
+
 template <typename T, typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
 inline T div_up(T x, T y) { return (x + y - 1) / y; }
 

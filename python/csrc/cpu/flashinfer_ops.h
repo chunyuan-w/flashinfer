@@ -22,3 +22,10 @@ void decode_attention(at::Tensor& query, at::Tensor& output,
 void grouped_topk(
     at::Tensor& topk_weights, at::Tensor& topk_ids, at::Tensor& hidden_states, at::Tensor& gating_output,
     int64_t topk, bool renormalize, int64_t num_expert_group, int64_t topk_group);
+
+// weight prepack
+at::Tensor convert_weight_packed(at::Tensor& weight);
+
+// moe
+at::Tensor fused_experts(at::Tensor& hidden_states, at::Tensor& w1, at::Tensor& w2,
+    at::Tensor& topk_weights, at::Tensor& topk_ids, bool inplace, bool is_vnni);

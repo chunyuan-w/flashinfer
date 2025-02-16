@@ -252,8 +252,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   //m.def("apply_llama31_rope_pos_ids", &apply_llama31_rope_pos_ids,
   //      "Apply Llama 3.1 style RoPE with positional ids");
 
+  // prepacking
+  m.def("convert_weight_packed", &convert_weight_packed, "prepack weight to vnni format");
+
   // sampling
   m.def("grouped_topk", &grouped_topk, "grouped topk sampling");
+  m.def("fused_experts", &fused_experts, "fused moe kernel");
   //m.def("sampling_from_probs", &sampling_from_probs, "Sample from probabilities");
   //m.def("top_k_sampling_from_probs", &top_k_sampling_from_probs,
   //      "Top-k sampling from probabilities");
