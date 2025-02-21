@@ -1,8 +1,6 @@
-#include <ATen/native/CPUBlas.h>
-#include "flashinfer_ops.h"
 #include "common.h"
 #include "vec.h"
-#include "amx.h"
+#include "gemm.h"
 
 namespace {
 
@@ -430,6 +428,7 @@ at::Tensor convert_weight_packed(at::Tensor& weight) {
   //     w1 : [E, 2N,  K]
   //     w2 : [E,  K,  N]
   CHECK_DIM(3, weight);
+  CHECK_INPUT(weight);
   const auto st = weight.scalar_type();
   const int E = weight.size(0);
   const int OC = weight.size(1);
