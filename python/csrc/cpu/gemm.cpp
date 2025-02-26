@@ -55,12 +55,39 @@ inline void pack_vnni(scalar_t* __restrict__ packed, const scalar_t* __restrict_
   }
 }
 
+// for fp8, shuffle per 64
+//   [0, 1, ... 31][32, 33, ... 63]
+//   [0, 2, ... 62][ 1,  3, ... 63]
+template <>
+inline void pack_vnni<at::Float8_e4m3fn>(at::Float8_e4m3fn* __restrict__ packed, const at::Float8_e4m3fn* __restrict__ weight, int N, int K) {
+  for (int n = 0; n < N; ++n) {
+    for (int k = 0; k < K / VNNI_BLK; ++k) {
+      for (int d = 0; d < VNNI_BLK; ++d) {
+        packed[k * N * VNNI_BLK + n * VNNI_BLK + d] = weight[n * K + k * VNNI_BLK + d];
+      }
+    }
+  }
+
+  at::Float8_e4m3fn arr[64];
+  for (int i = 0; i < N * K / 64; ++i) {
+    auto row_ptr = packed + i * 64;
+    memcpy(arr, row_ptr, 64 * sizeof(at::Float8_e4m3fn));
+    // from [32, 2] to [2, 32]
+    for (int j = 0; j < 2; ++j) {
+      for (int k = 0; k < 32; ++k) {
+        row_ptr[j * 32 + k] = arr[k * 2 + j];
+      }
+    }
+  }
+}
+
+
 template <typename scalar_t, typename packed_t, int BLOCK_M, int BLOCK_N>
 struct tinygemm_kernel_nn {
   static inline void apply(
       const scalar_t* __restrict__ A, const packed_t* __restrict__ B, scalar_t* __restrict__ C,
       float scale, int K, int lda, int ldb, int ldc) {
-    TORCH_CHECK(false, "tinygemm_kernel_avx: scalar path not implemented!");
+    TORCH_CHECK(false, "tinygemm_kernel_nn: scalar path not implemented!");
   }
 };
 
@@ -70,8 +97,6 @@ struct tinygemm_kernel_nn<at::BFloat16, at::BFloat16, BLOCK_M, BLOCK_N> {
   static inline void apply(
       const at::BFloat16* __restrict__ A, const at::BFloat16* __restrict__ B, at::BFloat16* __restrict__ C,
       float scale, int K, int lda, int ldb, int ldc) {
-
-    //std::cout << "### tinygemm_kernel_nn: M = " << BLOCK_M << "; N = " << BLOCK_N << ";  K = " << K << std::endl;
 
     constexpr int ROWS = BLOCK_M;
     constexpr int COLS = BLOCK_N / 16;
@@ -154,9 +179,6 @@ void print_32x16(const __m512i x) {
   std::cout << std::endl;
 }
 
-
-#define MM512_SET_M256I(a, b) _mm512_inserti64x4(_mm512_castsi256_si512(a), b, 1)
-
 template <int BLOCK_M, int BLOCK_N>
 struct tinygemm_kernel_nn<at::BFloat16, at::Float8_e4m3fn, BLOCK_M, BLOCK_N> {
   static inline void apply(
@@ -165,7 +187,6 @@ struct tinygemm_kernel_nn<at::BFloat16, at::Float8_e4m3fn, BLOCK_M, BLOCK_N> {
 
     TORCH_CHECK(BLOCK_N % 32 == 0, "tinygemm float8 requires BLOCK_N to be 32x.");
 
-    //std::cout << "\n### tinygemm_kernel_nn fp8, scale = " << scale << std::endl;
     constexpr int ROWS = BLOCK_M;
     constexpr int COLS = BLOCK_N / 16;
 
@@ -176,7 +197,8 @@ struct tinygemm_kernel_nn<at::BFloat16, at::Float8_e4m3fn, BLOCK_M, BLOCK_N> {
     __m512bh vb[COLS];
     __m512 vc[ROWS * COLS];
 
-    __m512 vscale = _mm512_set1_ps(scale);
+    const __m512 vscale = _mm512_set1_ps(scale);
+    const __m512i mask = _mm512_set1_epi32(0xFFFF);
 
     auto loadc = [&](auto i) {
       vc[i] = _mm512_set1_ps(0.f);
@@ -212,20 +234,8 @@ struct tinygemm_kernel_nn<at::BFloat16, at::Float8_e4m3fn, BLOCK_M, BLOCK_N> {
           __m512i bf16_i32_vec2 = _mm512_i32gather_epi32(idx2, e4m3_to_16bit, 2);
           __m512i bf16_i32_vec3 = _mm512_i32gather_epi32(idx3, e4m3_to_16bit, 2);
 
-          __m256i bf16_i16_vec0 = _mm512_cvtepi32_epi16(bf16_i32_vec0);
-          __m256i bf16_i16_vec1 = _mm512_cvtepi32_epi16(bf16_i32_vec1);
-          __m256i bf16_i16_vec2 = _mm512_cvtepi32_epi16(bf16_i32_vec2);
-          __m256i bf16_i16_vec3 = _mm512_cvtepi32_epi16(bf16_i32_vec3);
-
-          vb[col + 0] = (__m512bh)(MM512_SET_M256I(bf16_i16_vec0, bf16_i16_vec1));
-          vb[col + 1] = (__m512bh)(MM512_SET_M256I(bf16_i16_vec2, bf16_i16_vec3));
-
-          //if (k == 0) {
-          //  print_16x16(bf16_i16_vec0);
-          //  print_16x16(bf16_i16_vec1);
-          //  print_32x16((__m512i)vb[col + 0]);
-          //}
-
+          vb[col + 0] = (__m512bh)(_mm512_or_epi32(_mm512_slli_epi32(bf16_i32_vec2, 16), _mm512_and_epi32(bf16_i32_vec0, mask)));
+          vb[col + 1] = (__m512bh)(_mm512_or_epi32(_mm512_slli_epi32(bf16_i32_vec3, 16), _mm512_and_epi32(bf16_i32_vec1, mask)));
         }
       }
       vc[i] = _mm512_dpbf16_ps(vc[i], va, vb[col]);
@@ -512,7 +522,6 @@ void bmm(at::Tensor& out, at::Tensor& mat1, at::Tensor& mat2, bool is_vnni,
   int N = mat2.size(1);
   int K = mat1.size(2);
 
-  //std::cout << "### packed_w: " << packed_w[0].view({K/2, N*2}) << std::endl;
   const bool use_fp8_w8a16 = scale.has_value();
 
   int mat1_strideB = mat1.stride(0);
