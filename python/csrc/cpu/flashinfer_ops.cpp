@@ -228,8 +228,13 @@ at::Tensor convert_weight_packed(at::Tensor& weight);
 at::Tensor fused_experts(at::Tensor& hidden_states, at::Tensor& w1, at::Tensor& w2,
     at::Tensor& topk_weights, at::Tensor& topk_ids, bool inplace, bool is_vnni);
 
+// gemm
+void bmm(at::Tensor& out, at::Tensor& mat1, at::Tensor& mat2, bool is_vnni, std::optional<at::Tensor>& bias);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  // gemm
+  m.def("bmm", &bmm, "bmm cpu kernel");
+
   // activation
   m.def("silu_and_mul", &silu_and_mul, "Fused SiLU and Mul");
   //m.def("gelu_tanh_and_mul", &gelu_tanh_and_mul, "Fused GeLU Tanh and Mul");
