@@ -13,6 +13,9 @@
 constexpr int block_size_m() { return 1 * TILE_M; }
 constexpr int block_size_n() { return 4 * TILE_N; }
 
+// work around compiler internal error
+#define BLOCK_K 128 // 4 * TILE_K
+
 // dispatch: bfloat16, float16, float8_e4m3
 #define CPU_DISPATCH_FLOAT_TYPES(TYPE, ...)                                     \
   [&] {                                                                         \

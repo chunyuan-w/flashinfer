@@ -42,6 +42,27 @@ inline void copy_stub(scalar_t* __restrict__ out, const float* __restrict__ inpu
   }
 }
 
+template <typename scalar_t>
+inline void copy_mul_stub(scalar_t* __restrict__ out, const float* __restrict__ input, int size, float scale) {
+  using bVec = at::vec::Vectorized<scalar_t>;
+  using fVec = at::vec::Vectorized<float>;
+  constexpr int kVecSize = bVec::size();
+  const fVec vscale = fVec(scale);
+
+  int d;
+  #pragma GCC unroll 4
+  for (d = 0; d <= size - kVecSize; d += kVecSize) {
+    fVec data0 = fVec::loadu(input + d) * vscale;
+    fVec data1 = fVec::loadu(input + d + fVec::size()) * vscale;
+    bVec out_vec = convert_from_float_ext<scalar_t>(data0, data1);
+    out_vec.store(out + d);
+  }
+  for (; d < size; ++d) {
+    out[d] = static_cast<scalar_t>(input[d] * scale);
+  }
+}
+
+
 // convert to vnni format
 // from [N, K] to [K/2, N, 2] for bfloat16 and float16
 template <typename scalar_t>
@@ -185,8 +206,6 @@ struct tinygemm_kernel_nn<at::BFloat16, at::Float8_e4m3fn, BLOCK_M, BLOCK_N> {
       const at::BFloat16* __restrict__ A, const at::Float8_e4m3fn* __restrict__ B, at::BFloat16* __restrict__ C,
       float scale, int K, int lda, int ldb, int ldc) {
 
-    TORCH_CHECK(BLOCK_N % 32 == 0, "tinygemm float8 requires BLOCK_N to be 32x.");
-
     constexpr int ROWS = BLOCK_M;
     constexpr int COLS = BLOCK_N / 16;
 
@@ -229,13 +248,13 @@ struct tinygemm_kernel_nn<at::BFloat16, at::Float8_e4m3fn, BLOCK_M, BLOCK_N> {
           __m512i idx2 = _mm512_cvtepu8_epi32(_mm512_extracti32x4_epi32(b8, 2));
           __m512i idx3 = _mm512_cvtepu8_epi32(_mm512_extracti32x4_epi32(b8, 3));
 
-          __m512i bf16_i32_vec0 = _mm512_i32gather_epi32(idx0, e4m3_to_16bit, 2);
-          __m512i bf16_i32_vec1 = _mm512_i32gather_epi32(idx1, e4m3_to_16bit, 2);
-          __m512i bf16_i32_vec2 = _mm512_i32gather_epi32(idx2, e4m3_to_16bit, 2);
-          __m512i bf16_i32_vec3 = _mm512_i32gather_epi32(idx3, e4m3_to_16bit, 2);
+          __m512i b16_0 = _mm512_i32gather_epi32(idx0, e4m3_to_16bit, 2);
+          __m512i b16_1 = _mm512_i32gather_epi32(idx1, e4m3_to_16bit, 2);
+          __m512i b16_2 = _mm512_i32gather_epi32(idx2, e4m3_to_16bit, 2);
+          __m512i b16_3 = _mm512_i32gather_epi32(idx3, e4m3_to_16bit, 2);
 
-          vb[col + 0] = (__m512bh)(_mm512_or_epi32(_mm512_slli_epi32(bf16_i32_vec2, 16), _mm512_and_epi32(bf16_i32_vec0, mask)));
-          vb[col + 1] = (__m512bh)(_mm512_or_epi32(_mm512_slli_epi32(bf16_i32_vec3, 16), _mm512_and_epi32(bf16_i32_vec1, mask)));
+          vb[col + 0] = (__m512bh)(_mm512_or_epi32(_mm512_slli_epi32(b16_2, 16), _mm512_and_epi32(b16_0, mask)));
+          vb[col + 1] = (__m512bh)(_mm512_or_epi32(_mm512_slli_epi32(b16_3, 16), _mm512_and_epi32(b16_1, mask)));
         }
       }
       vc[i] = _mm512_dpbf16_ps(vc[i], va, vb[col]);
@@ -259,7 +278,6 @@ struct tinygemm_kernel_nn<at::BFloat16, at::Float8_e4m3fn, BLOCK_M, BLOCK_N> {
     Unroll<ROWS * COLS>{}(storec);
   }
 };
-
 #endif
 
 #define LAUNCH_TINYGEMM_KERNEL_NN(MB_SIZE, NB_SIZE)                          \
@@ -273,8 +291,11 @@ struct brgemm {};
 template <typename scalar_t>
 struct brgemm<scalar_t, scalar_t> {
   static inline void apply(
-      const scalar_t* __restrict__ A, const scalar_t* __restrict__ B, scalar_t* __restrict__ C, float* __restrict__ Ctmp,
+      const scalar_t* __restrict__ A, const scalar_t* __restrict__ B, scalar_t* __restrict__ C,
+      scalar_t* __restrict__ Btmp, float* __restrict__ Ctmp, float scale,
       int M, int N, int K, int lda, int ldb, int ldc) {
+
+    TORCH_UNUSED(scale);
 
     constexpr int BLOCK_N = block_size_n();
     at::native::cpublas::brgemm(
@@ -288,14 +309,67 @@ struct brgemm<scalar_t, scalar_t> {
   }
 };
 
+inline void unpack_B(
+    at::BFloat16* __restrict__ Btmp, const at::Float8_e4m3fn* __restrict__ packed_B,
+    int N, int K, int ldb, int ldb_tmp) {
+
+  // [K/2, N, 2]
+  const int K2 = K >> 1;
+  const int ldb2 = ldb; // ldb * 2 >> 1;
+  const uint16_t* b_ptr = reinterpret_cast<const uint16_t*>(packed_B);
+
+  const __m512i mask = _mm512_set1_epi32(0xFFFF);
+
+  #pragma GCC unroll 4
+  for (int k = 0; k < K2; ++k) {
+    for (int n = 0; n < N; n += 32) {
+      __m512i b8 = _mm512_loadu_si512(b_ptr + k * ldb2 + n);
+      __m512i idx0 = _mm512_cvtepu8_epi32(   _mm512_castsi512_si128(b8));
+      __m512i idx1 = _mm512_cvtepu8_epi32(_mm512_extracti32x4_epi32(b8, 1));
+      __m512i idx2 = _mm512_cvtepu8_epi32(_mm512_extracti32x4_epi32(b8, 2));
+      __m512i idx3 = _mm512_cvtepu8_epi32(_mm512_extracti32x4_epi32(b8, 3));
+
+      __m512i b16_0 = _mm512_i32gather_epi32(idx0, e4m3_to_16bit, 2);
+      __m512i b16_1 = _mm512_i32gather_epi32(idx1, e4m3_to_16bit, 2);
+      __m512i b16_2 = _mm512_i32gather_epi32(idx2, e4m3_to_16bit, 2);
+      __m512i b16_3 = _mm512_i32gather_epi32(idx3, e4m3_to_16bit, 2);
+
+      __m512i b16_02 = _mm512_or_epi32(_mm512_slli_epi32(b16_2, 16), _mm512_and_epi32(b16_0, mask));
+      __m512i b16_13 = _mm512_or_epi32(_mm512_slli_epi32(b16_3, 16), _mm512_and_epi32(b16_1, mask));
+
+      _mm512_storeu_si512(Btmp + k * ldb_tmp * 2 + n * 2 +  0, b16_02);
+      _mm512_storeu_si512(Btmp + k * ldb_tmp * 2 + n * 2 + 32, b16_13);
+    }
+  }
+}
+
 template <>
 struct brgemm<at::BFloat16, at::Float8_e4m3fn> {
   static inline void apply(
-      const at::BFloat16* __restrict__ A, const at::Float8_e4m3fn* __restrict__ B, at::BFloat16* __restrict__ C, float* __restrict__ Ctmp,
+      const at::BFloat16* __restrict__ A, const at::Float8_e4m3fn* __restrict__ B, at::BFloat16* __restrict__ C,
+      at::BFloat16* __restrict__ Btmp, float* __restrict__ Ctmp, float scale,
       int M, int N, int K, int lda, int ldb, int ldc) {
 
-    std::cout << "### brgemm fp8" << std::endl;
+    constexpr int BLOCK_N = block_size_n();
 
+    // [BLOCK_K, BLOCK_N] -> [BLOCK_K / 2, BLOCK_N * 2]
+    const int ldb_tmp = block_size_n();
+
+    // accumulate across K per BLOCK_K
+    for (int k = 0; k < K; k += BLOCK_K) {
+      int kb_size = std::min(BLOCK_K, K - k);
+      unpack_B(Btmp, B + k * ldb, N, kb_size, ldb, ldb_tmp);
+
+      const bool add_C = (k != 0);
+      at::native::cpublas::brgemm(
+          M, N, kb_size, lda, ldb_tmp, BLOCK_N, add_C,
+          A + k, Btmp, Ctmp);
+    }
+
+    // copy from Ctmp to C and mul scale
+    for (int m = 0; m < M; ++m) {
+      copy_mul_stub(C + m * ldc, Ctmp + m * BLOCK_N, N, scale);
+    }
   }
 };
 
@@ -304,6 +378,7 @@ void tinygemm_kernel(
     const scalar_t* __restrict__ A,
     const packed_t* __restrict__ B,
     scalar_t* __restrict__ C,
+    scalar_t* __restrict__ Btmp,
     float* __restrict__ Ctmp,
     float scale,
     int M,
@@ -315,7 +390,9 @@ void tinygemm_kernel(
     bool brg) {
 
   if (brg) {
-    brgemm<scalar_t, packed_t>::apply(A, B, C, Ctmp, M, N, K, lda, ldb, ldc);
+    brgemm<scalar_t, packed_t>::apply(
+        A, B, C, Btmp, Ctmp, scale,
+        M, N, K, lda, ldb, ldc);
     return;
   }
 
@@ -330,13 +407,9 @@ void tinygemm_kernel(
       int nb_size = std::min(BLOCK_N, N - nb_start);
 
       switch(nb_size >> 4) {
-        case 1: LAUNCH_TINYGEMM_KERNEL_NN(1, 16); break;
         case 2: LAUNCH_TINYGEMM_KERNEL_NN(1, 32); break;
-        case 3: LAUNCH_TINYGEMM_KERNEL_NN(1, 48); break;
         case 4: LAUNCH_TINYGEMM_KERNEL_NN(1, 64); break;
-        case 5: LAUNCH_TINYGEMM_KERNEL_NN(1, 80); break;
         case 6: LAUNCH_TINYGEMM_KERNEL_NN(1, 96); break;
-        case 7: LAUNCH_TINYGEMM_KERNEL_NN(1, 112); break;
         case 8: LAUNCH_TINYGEMM_KERNEL_NN(1, 128); break;
         default: TORCH_CHECK(false, "Unexpected block size, 1x", "nb_size");
       }
@@ -358,24 +431,16 @@ void tinygemm_kernel(
 
       switch(mb_size << 4 | nb_size >> 4) {
         // mb_size = 1
-        case 0x11: LAUNCH_TINYGEMM_KERNEL_NN(1, 16); break;
         case 0x12: LAUNCH_TINYGEMM_KERNEL_NN(1, 32); break;
-        case 0x13: LAUNCH_TINYGEMM_KERNEL_NN(1, 48); break;
         case 0x14: LAUNCH_TINYGEMM_KERNEL_NN(1, 64); break;
         // mb_size = 2
-        case 0x21: LAUNCH_TINYGEMM_KERNEL_NN(2, 16); break;
         case 0x22: LAUNCH_TINYGEMM_KERNEL_NN(2, 32); break;
-        case 0x23: LAUNCH_TINYGEMM_KERNEL_NN(2, 48); break;
         case 0x24: LAUNCH_TINYGEMM_KERNEL_NN(2, 64); break;
         // mb_size = 3
-        case 0x31: LAUNCH_TINYGEMM_KERNEL_NN(3, 16); break;
         case 0x32: LAUNCH_TINYGEMM_KERNEL_NN(3, 32); break;
-        case 0x33: LAUNCH_TINYGEMM_KERNEL_NN(3, 48); break;
         case 0x34: LAUNCH_TINYGEMM_KERNEL_NN(3, 64); break;
         // mb_size = 4
-        case 0x41: LAUNCH_TINYGEMM_KERNEL_NN(4, 16); break;
         case 0x42: LAUNCH_TINYGEMM_KERNEL_NN(4, 32); break;
-        case 0x43: LAUNCH_TINYGEMM_KERNEL_NN(4, 48); break;
         case 0x44: LAUNCH_TINYGEMM_KERNEL_NN(4, 64); break;
         default: TORCH_CHECK(false, "Unexpected block size, ", mb_size, "x", "nb_size");
       }
@@ -399,7 +464,6 @@ void bmm_kernel_impl(
     int out_strideM,
     float scale = 0.f) {
 
-  //std::cout << "### bmm_kernel_impl" << std::endl;
   constexpr int BLOCK_M = block_size_m();
   constexpr int BLOCK_N = block_size_n();
   const int MB = div_up(M, BLOCK_M);
@@ -419,6 +483,8 @@ void bmm_kernel_impl(
 
     // for brgemm, use float32 for accumulate
     alignas(64) float Ctmp[BLOCK_M * BLOCK_N];
+    // for brgemm when mat2 is float8_e4m3
+    alignas(64) scalar_t Btmp[BLOCK_N * BLOCK_K];
 
     for (int i = begin; i < end; ++i) {
       TORCH_UNUSED(i);
@@ -431,6 +497,7 @@ void bmm_kernel_impl(
           /*   A */ mat1 + bs * mat1_strideB + mb_start * mat1_strideM,
           /*   B */ mat2 + bs * mat2_strideB + nb_start * mat2_strideN /* nb * BLOCK_N * K */,
           /*   C */ out + bs * out_strideB + mb_start * out_strideM + nb_start,
+          /* Btmp*/ Btmp,
           /* Ctmp*/ Ctmp,
           /*scale*/ scale,
           /*   M */ mb_size,
@@ -523,6 +590,7 @@ void bmm(at::Tensor& out, at::Tensor& mat1, at::Tensor& mat2, bool is_vnni,
   int K = mat1.size(2);
 
   const bool use_fp8_w8a16 = scale.has_value();
+  TORCH_CHECK(N % 32 == 0, "tinygemm requires N to be 32x.");
 
   int mat1_strideB = mat1.stride(0);
   int mat1_strideM = mat1.stride(1);
