@@ -156,11 +156,17 @@ def get_gemm_module():
             )
             return out
         
+
+        def convert_weight_packed(weight):
+            out = module.convert_weight_packed(weight)
+            return out        
+        
         # Register the module
         _gemm_module = SimpleNamespace(
             # bmm_fp8=bmm_fp8,
             # cutlass_segment_gemm=cutlass_segment_gemm,
             fused_experts=fused_experts,
+            convert_weight_packed=convert_weight_packed,
         )
 
     return _gemm_module
@@ -763,6 +769,11 @@ def fused_experts(
         topk_weights,
         topk_ids,
         inplace, # TODO: fix inplace
-        False, # TODO: fix is_vnni
+        True, # TODO: fix is_vnni
     )
     return out
+
+
+def convert_weight_packed(weight):
+    out = get_gemm_module().convert_weight_packed(weight)
+    return out    
