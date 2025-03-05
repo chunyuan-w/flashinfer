@@ -54,92 +54,113 @@ def get_gemm_module():
 
         # torch library for bmm_fp8
 
-        @register_custom_op(
-            "flashinfer::bmm_fp8", mutates_args=("workspace_buffer", "D")
-        )
-        def bmm_fp8(
-            workspace_buffer: torch.Tensor,
-            A: torch.Tensor,
-            B: torch.Tensor,
-            D: torch.Tensor,
-            A_scale: torch.Tensor,
-            B_scale: torch.Tensor,
-        ) -> None:
-            with A.device as device:
-                cublas_handle = torch.cuda.current_blas_handle()
-                module.bmm_fp8(
-                    A,
-                    B,
-                    D,
-                    A_scale,
-                    B_scale,
-                    workspace_buffer,
-                    cublas_handle,
-                    get_cuda_stream(device),
-                )
+        # @register_custom_op(
+        #     "flashinfer::bmm_fp8", mutates_args=("workspace_buffer", "D")
+        # )
+        # def bmm_fp8(
+        #     workspace_buffer: torch.Tensor,
+        #     A: torch.Tensor,
+        #     B: torch.Tensor,
+        #     D: torch.Tensor,
+        #     A_scale: torch.Tensor,
+        #     B_scale: torch.Tensor,
+        # ) -> None:
+        #     with A.device as device:
+        #         cublas_handle = torch.cuda.current_blas_handle()
+        #         module.bmm_fp8(
+        #             A,
+        #             B,
+        #             D,
+        #             A_scale,
+        #             B_scale,
+        #             workspace_buffer,
+        #             cublas_handle,
+        #             get_cuda_stream(device),
+        #         )
 
-        @register_fake_op("flashinfer::bmm_fp8")
-        def _fake_bmm_fp8(
-            workspace_buffer: torch.Tensor,
-            A: torch.Tensor,
-            B: torch.Tensor,
-            D: torch.Tensor,
-            A_scale: torch.Tensor,
-            B_scale: torch.Tensor,
-        ) -> None:
-            pass
+        # @register_fake_op("flashinfer::bmm_fp8")
+        # def _fake_bmm_fp8(
+        #     workspace_buffer: torch.Tensor,
+        #     A: torch.Tensor,
+        #     B: torch.Tensor,
+        #     D: torch.Tensor,
+        #     A_scale: torch.Tensor,
+        #     B_scale: torch.Tensor,
+        # ) -> None:
+        #     pass
 
         # torch library for cutlass_segment_gemm
 
-        @register_custom_op("flashinfer::cutlass_segment_gemm", mutates_args=("y"))
-        def cutlass_segment_gemm(
-            workspace_buffer: torch.Tensor,
-            all_problems: torch.Tensor,
-            x_data: torch.Tensor,
-            w_data: torch.Tensor,
-            y_data: torch.Tensor,
-            x_ld: torch.Tensor,
-            w_ld: torch.Tensor,
-            y_ld: torch.Tensor,
-            y: torch.Tensor,
-            empty_x_data: torch.Tensor,
-            weight_column_major: bool,
-        ) -> None:
-            with x_data.device as device:
-                module.cutlass_segment_gemm(
-                    workspace_buffer,
-                    all_problems,
-                    x_data,
-                    w_data,
-                    y_data,
-                    x_ld,
-                    w_ld,
-                    y_ld,
-                    empty_x_data,
-                    weight_column_major,
-                    get_cuda_stream(device),
-                )
+        # @register_custom_op("flashinfer::cutlass_segment_gemm", mutates_args=("y"))
+        # def cutlass_segment_gemm(
+        #     workspace_buffer: torch.Tensor,
+        #     all_problems: torch.Tensor,
+        #     x_data: torch.Tensor,
+        #     w_data: torch.Tensor,
+        #     y_data: torch.Tensor,
+        #     x_ld: torch.Tensor,
+        #     w_ld: torch.Tensor,
+        #     y_ld: torch.Tensor,
+        #     y: torch.Tensor,
+        #     empty_x_data: torch.Tensor,
+        #     weight_column_major: bool,
+        # ) -> None:
+        #     with x_data.device as device:
+        #         module.cutlass_segment_gemm(
+        #             workspace_buffer,
+        #             all_problems,
+        #             x_data,
+        #             w_data,
+        #             y_data,
+        #             x_ld,
+        #             w_ld,
+        #             y_ld,
+        #             empty_x_data,
+        #             weight_column_major,
+        #             get_cuda_stream(device),
+        #         )
 
-        @register_fake_op("flashinfer::cutlass_segment_gemm")
-        def _fake_cutlass_segment_gemm(
-            workspace_buffer: torch.Tensor,
-            all_problems: torch.Tensor,
-            x_data: torch.Tensor,
-            w_data: torch.Tensor,
-            y_data: torch.Tensor,
-            x_ld: torch.Tensor,
-            w_ld: torch.Tensor,
-            y_ld: torch.Tensor,
-            y: torch.Tensor,
-            empty_x_data: torch.Tensor,
-            weight_column_major: bool,
-        ) -> None:
-            pass
+        # @register_fake_op("flashinfer::cutlass_segment_gemm")
+        # def _fake_cutlass_segment_gemm(
+        #     workspace_buffer: torch.Tensor,
+        #     all_problems: torch.Tensor,
+        #     x_data: torch.Tensor,
+        #     w_data: torch.Tensor,
+        #     y_data: torch.Tensor,
+        #     x_ld: torch.Tensor,
+        #     w_ld: torch.Tensor,
+        #     y_ld: torch.Tensor,
+        #     y: torch.Tensor,
+        #     empty_x_data: torch.Tensor,
+        #     weight_column_major: bool,
+        # ) -> None:
+        #     pass
 
+        def fused_experts(
+            hidden_states,
+            w1,
+            w2,
+            topk_weights,
+            topk_ids,
+            inplace,
+            is_vnni,
+        ):
+            out = module.fused_experts(
+                hidden_states,
+                w1,
+                w2,
+                topk_weights,
+                topk_ids,
+                inplace,
+                is_vnni,
+            )
+            return out
+        
         # Register the module
         _gemm_module = SimpleNamespace(
-            bmm_fp8=bmm_fp8,
-            cutlass_segment_gemm=cutlass_segment_gemm,
+            # bmm_fp8=bmm_fp8,
+            # cutlass_segment_gemm=cutlass_segment_gemm,
+            fused_experts=fused_experts,
         )
 
     return _gemm_module
@@ -725,4 +746,23 @@ def bmm_fp8(
         )
     workspace_buffer = _get_cache_buf("bmm_fp8_workspace", 32 * 1024 * 1024, A.device)
     get_gemm_module().bmm_fp8(workspace_buffer, A, B, out, A_scale, B_scale)
+    return out
+
+def fused_experts(
+    hidden_states,
+    w1,
+    w2,
+    topk_weights,
+    topk_ids,
+    inplace):
+    # TODO: fix inplace = True
+    out = get_gemm_module().fused_experts(
+        hidden_states,
+        w1,
+        w2,
+        topk_weights,
+        topk_ids,
+        inplace, # TODO: fix inplace
+        False, # TODO: fix is_vnni
+    )
     return out
