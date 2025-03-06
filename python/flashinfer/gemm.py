@@ -760,7 +760,8 @@ def fused_experts(
     w2,
     topk_weights,
     topk_ids,
-    inplace):
+    inplace,
+    is_vnni):
     # TODO: fix inplace = True
     out = get_gemm_module().fused_experts(
         hidden_states,
@@ -768,8 +769,8 @@ def fused_experts(
         w2,
         topk_weights,
         topk_ids,
-        inplace, # TODO: fix inplace
-        True, # TODO: fix is_vnni
+        inplace,
+        is_vnni,
     )
     return out
 
